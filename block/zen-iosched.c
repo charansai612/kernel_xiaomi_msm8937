@@ -16,9 +16,9 @@
 
 enum zen_data_dir { ASYNC, SYNC };
 
-static const int sync_expire  = 1000;    /* max time before a sync is submitted. */
-static const int async_expire = 5000;    /* ditto for async, these limits are SOFT! */
-static const int fifo_batch = 1;
+static const int sync_expire  = HZ / 2;    /* max time before a sync is submitted. */
+static const int async_expire = 5 * HZ;    /* ditto for async, these limits are SOFT! */
+static const int fifo_batch = 16;
 
 struct zen_data {
 	/* Runtime Data */
@@ -48,9 +48,9 @@ zen_merged_requests(struct request_queue *q, struct request *req,
 	 * and move into next position (next will be deleted) in fifo
 	 */
 	if (!list_empty(&req->queuelist) && !list_empty(&next->queuelist)) {
-		if (time_before(rq_fifo_time(next), rq_fifo_time(req))) {
+		if (time_before(next->fifo_time, req->fifo_time)) {
 			list_move(&req->queuelist, &next->queuelist);
-			rq_set_fifo_time(req, rq_fifo_time(next));
+			req->fifo_time = next->fifo_time;
 		}
 	}
 
@@ -64,7 +64,7 @@ static void zen_add_request(struct request_queue *q, struct request *rq)
 	const int sync = rq_is_sync(rq);
 
 	if (zdata->fifo_expire[sync]) {
-		rq_set_fifo_time(rq, jiffies + zdata->fifo_expire[sync]);
+		rq->fifo_time = jiffies + zdata->fifo_expire[sync];
 		list_add_tail(&rq->queuelist, &zdata->fifo_list[sync]);
 	}
 }
@@ -91,7 +91,7 @@ zen_expired_request(struct zen_data *zdata, int ddir)
                 return NULL;
 
         rq = rq_entry_fifo(zdata->fifo_list[ddir].next);
-        if (time_after(jiffies, rq_fifo_time(rq)))
+        if (time_after(jiffies, rq->fifo_time))
                 return rq;
 
         return NULL;
@@ -108,7 +108,7 @@ zen_check_fifo(struct zen_data *zdata)
         struct request *rq_async = zen_expired_request(zdata, ASYNC);
 
         if (rq_async && rq_sync) {
-        	if (time_after(rq_fifo_time(rq_async), rq_fifo_time(rq_sync)))
+        	if (time_after(rq_async->fifo_time, rq_sync->fifo_time))
                 	return rq_sync;
         } else if (rq_sync) {
                 return rq_sync;
@@ -285,4 +285,4 @@ module_exit(zen_exit);
 MODULE_AUTHOR("Brandon Berhent");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Zen IO scheduler");
-MODULE_VERSION("1.0");
+MODULE_VERSION("1.1");
